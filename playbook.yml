@@ -1,0 +1,140 @@
+---
+- hosts: all
+  become: yes
+  become_method: sudo
+  become_user: root
+  become_flags: -H
+  vars:
+    apache_user: www-data
+    apache_group: www-data
+    apache_listen_port: 80
+    php8_and_modules: php8.0, libapache2-mod-php8.0, php8.0-cli, php8.0-common, php8.0-mysql, php8.0-xml, php8.0-xmlrpc, php8.0-curl, php8.0-gd, php8.0-imagick, php8.0-cli, php8.0-dev, php8.0-imap, php8.0-mbstring, php8.0-opcache, php8.0-soap, php8.0-zip, php8.0-intl, php8.0-bcmath
+
+  tasks:
+    - name: Update APT Package Manager
+      apt:
+        update_cache: yes
+
+    - name: Installation of packages
+      ansible.builtin.apt:
+        name:
+          - lsb-release
+          - ca-certificates
+          - apt-transport-https
+          - software-properties-common
+          - gnupg2
+          - curl
+          - wget
+          - apache2
+          - apache2-utils
+          - elinks      
+
+    - name: Add PHP 8.0 Repository
+      ansible.builtin.shell: sudo add-apt-repository ppa:ondrej/php -y
+ 
+    - name: Update packages
+      ansible.builtin.shell: apt update -y
+      
+    - name: Upgrade packages
+      ansible.builtin.shell: apt upgrade -y
+
+    - name: Install PHP 8 and modules
+      ansible.builtin.apt:
+        name: '{{ php8_and_modules }}'
+
+    - name: download composer installer
+      get_url:
+        url: https://getcomposer.org/installer
+        dest: /tmp/composer
+
+    - name: install composer
+      shell: php /tmp/composer --install-dir=/usr/local/bin  --no-interaction
+
+    - name: rename composer executable
+      shell: mv /usr/local/bin/composer.phar /usr/local/bin/composer
+
+    - name: set permissions for composer file
+      file:
+        path: /usr/local/bin/composer
+        mode: a+x
+        state: file
+
+    - name: Clone Laravel Repo
+      ansible.builtin.shell: rm -rf /var/www/laravel/ && git clone https://github.com/f1amy/laravel-realworld-example-app.git /var/www/laravel/
+
+    - name: Install Laravel Dependencies
+      ansible.builtin.shell:
+        cd /var/www/laravel && composer update --no-interaction
+      environment:
+        COMPOSER_ALLOW_SUPERUSER: 1
+
+    - name: copy env file
+      copy:
+        src: /var/www/laravel/.env.example
+        remote_src: yes
+        dest: /var/www/laravel/.env
+        owner: "{{ ansible_effective_user_id }}"
+        group: "{{ ansible_effective_group_id }}"
+        mode: '0644'
+
+    - name: Create virtual host config
+      copy:
+        dest: "/etc/apache2/sites-available/laravel.conf"
+        content: |
+          <VirtualHost *:80>
+              ServerName $SERVER_NAME
+              DocumentRoot /var/www/laravel/public
+              <Directory /var/www/laravel/public>
+                  AllowOverride All
+                  Order allow,deny
+                  Allow from all
+              </Directory>
+          </VirtualHost>
+    - name:  Create .htaccess
+      copy:
+        dest: "/var/www/laravel/.htaccess"
+        content: |
+          <IfModule mod_rewrite.c>
+          RewriteEngine On
+          RewriteCond %{HTTP:Authorization} .
+          RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+          RewriteCond %{REQUEST_FILENAME} !-d
+          RewriteCond %{REQUEST_FILENAME} !-f
+          RewriteRule ^ index.php [L]
+          </IfModule>
+    - name: Set owner and permissions
+      ansible.builtin.shell: chown -R www-data:www-data /var/www/laravel && chmod -R 755 /var/www/laravel
+      
+    - name: calm
+      ansible.builtin.shell: chgrp -R www-data /var/www/laravel/storage /var/www/laravel/bootstrap/cache
+      
+    - name: well
+      ansible.builtin.shell: chmod -R ug+rwx /var/www/laravel/storage /var/www/laravel/bootstrap/cache
+
+    - name: set server name
+      replace:
+        path: /etc/apache2/sites-available/laravel.conf
+        regexp: '$SERVER_NAME'
+        replace: '{{ ansible_host }}'
+
+    - name: enable the new config
+      shell: |
+          a2ensite laravel.conf
+          a2dissite 000-default.conf
+          a2enmod rewrite
+          a2enmod php8.1
+          systemctl restart apache2
+    - name: setup laravel
+      shell: |
+          cd /var/www/laravel
+          php artisan key:generate
+    
+    # - name: Copy and run local bash script to setup Postgres DB
+    #   copy: src=script.sh dest=/tmp/script.sh mode=0777
+    #   shell: /tmp/script.sh
+
+    # - name: Install certbot
+    #   apt: name=certbot state=present
+
+    # - name: Configure Let's Encrypt for Apache
+    #   shell: certbot --apache -d {{ inventory_hostname }}
