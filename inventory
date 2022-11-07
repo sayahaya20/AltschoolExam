@@ -1,2 +1,4 @@
 [web_server]
 35.246.178.158
+ansible_user=node1 
+ansible_ssh_pass=password 
